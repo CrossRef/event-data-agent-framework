@@ -65,13 +65,24 @@ The following config values should be set:
 
 An Agent that uses this framework should be run:
 
-    lein run service
+    lein run ingest
+
+    lein run process
+
+The ingestion part is split from the rest of the service. This is to balance complexity on the one hand with the ability to keep the ingester running (which may be gathering valuable data) with the other components.
 
 To reprocess an Evidence Record, taking an Evidence Record as STDIN and returning the Evidence Record with Events reconstructed:
 
     cat input.json | lein run process-evidence > output.json
 
-## External Service
+## External Services
 
 This needs an instance of the Evidence Service and the Status Service, which must be provided as configuration. In the case of service unavailability, these will be automatically round-robinned.
 
+
+
+## Development
+
+To use use a local repository when developing new functionality against agents:
+
+    lein test && lein uberjar && rm -rf ~/.m2/repository/org.crossref && lein localrepo install target/uberjar/event-data-agent-framework-0.1.0-SNAPSHOT.jar org.crossref/event-data-agent-framework "0.1.0"
