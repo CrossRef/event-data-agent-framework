@@ -1,5 +1,6 @@
 (ns org.crossref.event-data-agent-framework.core
-  (:require [clojure.tools.logging :as log])
+  (:require [clojure.tools.logging :as log]
+            [clojure.data.json :as json])
   (:require [overtone.at-at :as at-at]
             [org.httpkit.client :as client]
             [config.core :refer [env]])
@@ -14,7 +15,7 @@
   (not-empty
     (concat
       (when-not (:agent-name input) ["Missing agent-name"])
-      ; (when-not (:required-artifacts input) ["Missing required-artifacts"])
+      (when-not (:version input) ["Missing version"])
       (when-not (:schedule input) ["Missing schedule"])
       (when-not (:runners input) ["Missing runners"])
       (when-not (:build-evidence input) ["Missing build-evidence"])
@@ -28,7 +29,6 @@
       (log/error "Agent error: " er))
     (log/fatal "Agent definition incorrect, exiting.")
     (System/exit 1)))
-
 
 (def schedule-pool (at-at/mk-pool))
 
@@ -80,14 +80,22 @@
   (into {} (map (fn [artifact-name]
                   [artifact-name (fetch-artifact agent-definition artifact-name)]) artifact-names)))
 
-(defn receive-input
-  "Receive an input as a JSON-serializable Clojure structure. Passed as a callback.
-  Should be in the skeleton of an Evidence Record. Can contain:
-  :input 
-  :artifacts"
+(defn send-evidence-callback
+  "Receive an Evidence record input as a JSON-serializable Clojure structure. Passed as a callback."
   [input]
-  ; TODO
-  (prn "GOT INPUT CALLBACK" input))
+    (try 
+    ; TODO round-robin status servers. 
+    (let [result @(client/post (str (:evidence-service-base env) "/evidence")
+                             {:headers {"Content-type" "application/json" "Authorization" (str "Token " (:evidence-service-auth-token env))}
+                              :body (json/write-str input)
+                              :follow-redirects false})]
+      (log/info "Posted evidence, got response" (:status result) (:headers result))
+      ; Correct response is redirect to new resource.
+      (if (= (:status result) 303)
+        true
+        (log/error "Can't send Evidence, status" (:status result))))
+    (catch Exception e (log/error "Can't send Evidence, exception:" e))))
+  
 
 (defn run-ingest
   [agent-definition]
@@ -102,8 +110,9 @@
                     (log/info "Execute schedule" (:name schedule-item))
                     (send-heartbeat (str (:agent-name agent-definition) "/input/" (:name schedule-item)))
                     (let [artifacts (fetch-artifacts agent-definition (:required-artifacts schedule-item))]
+                      
                       ; Call the schedule function with the requested 
-                      ((:fun schedule-item) artifacts receive-input)
+                      ((:fun schedule-item) artifacts send-evidence-callback)
                       
                       (doseq [[_ [_ artifact-file]] artifacts]
                         (log/info "Deleting temporary artifact file" artifact-file)

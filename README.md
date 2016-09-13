@@ -59,10 +59,12 @@ The Agent automatically reports to the Health Service. Given the configuraion of
 
 The following config values should be set:
 
-  `EVIDENCE_SERVICE` - comma-separated URL endpoints, e.g. `"http://evidence.eventdata.crossref.org,http://192.168.0.1:8765"
-  `STATUS_SERVICE` - comma-separated URL endpoints, e.g. `"http://status.eventdata.crossref.org,http://192.168.0.1:8765"
-  `INTERNAL_AUTH_TOKEN` - auth token for use with Evidence Service and Status Service.
-
+  - `:evidence-service-base` - comma-separated URL endpoints, e.g. `"http://evidence.eventdata.crossref.org,http://192.168.0.1:8765"
+  - `:status-service-base` - comma-separated URL endpoints, e.g. `"http://status.eventdata.crossref.org,http://192.168.0.1:8765"
+  - `:reverse-service-base` - comma-separated reversal service URL endpoints, e.g. `"http://192.158.0.1:9997"`
+  - `:status-service-auth-token` - token for use with Status Service
+  - `:evidence-service-auth-token` - token for use with Evidence Service
+  
 An Agent that uses this framework should be run:
 
     lein run ingest
