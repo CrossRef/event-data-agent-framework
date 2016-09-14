@@ -117,7 +117,7 @@
                     (let [artifacts (fetch-artifacts agent-definition (:required-artifacts schedule-item))]
                       
                       ; Call the schedule function with the requested 
-                      ((:fun schedule-item) artifacts (partial agent-definition send-evidence-callback))
+                      ((:fun schedule-item) artifacts (partial send-evidence-callback agent-definition))
                       
                       (doseq [[_ [_ artifact-file]] artifacts]
                         (log/info "Deleting temporary artifact file" artifact-file)
