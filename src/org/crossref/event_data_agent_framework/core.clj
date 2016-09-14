@@ -3,7 +3,8 @@
             [clojure.data.json :as json])
   (:require [overtone.at-at :as at-at]
             [org.httpkit.client :as client]
-            [config.core :refer [env]])
+            [config.core :refer [env]]
+            [robert.bruce :refer [try-try-again]])
   (:import [java.net URL]
            [java.io FileOutputStream File]
            [java.nio.channels ReadableByteChannel Channels])
@@ -32,29 +33,27 @@
 
 (def schedule-pool (at-at/mk-pool))
 
-(defn send-heartbeat
-  "Send a named heartbeat to the Status server."
-  [heartbeat-name]
+(defn send-heartbeat [heartbeat-name heartbeat-count]
   (try 
-    ; TODO round-robin status servers. 
-    (let [result @(client/post (str (:status-service-base env) (str "/status/" heartbeat-name))
-                             {:headers {"Content-type" "text/plain" "Authorization" (str "Token " (:status-service-auth-token env))}
-                              :body "1"})]
-      (when-not (= (:status result) 201)
-        (log/error "Can't send heartbeat, status" (:status result))))
-    (catch Exception e (log/error "Can't send heartbeat, exception:" e))))
+    (try-try-again {:sleep 10000 :tries 10}
+       #(let [result @(client/post (str (:status-service-base env) (str "/status/" heartbeat-name))
+                       {:headers {"Content-type" "text/plain" "Authorization" (str "Token " (:status-service-auth-token env))}
+                        :body (str heartbeat-count)})]
+         (when-not (= (:status result) 201)
+           (log/error "Can't send heartbeat, status" (:status result)))))
+   (catch Exception e (log/error "Can't send heartbeat, exception:" e))))
 
 (defn start-heartbeat
   "Schedule a named heartbeat with the Status server to trigger once a minute."
   [heartbeat-name]
-  (at-at/every 60000 #(send-heartbeat heartbeat-name) schedule-pool))
+  (at-at/every 60000 #(send-heartbeat heartbeat-name 1) schedule-pool))
 
 
 (defn fetch-artifact
   "Download artifact to temp file. Return [version-url temp-file] or nil.
   File must be deleted after use."
   [agent-definition artifact-name]
-  (send-heartbeat (str (:agent-name agent-definition) "/artifact/fetch"))
+  (send-heartbeat (str (:agent-name agent-definition) "/artifact/fetch") 1)
   (let [; Resolve the current artifact
         latest-artifact-url (new URL (str (:evidence-service-base env) "/artifacts/" artifact-name "/current"))
         
@@ -82,7 +81,7 @@
 
 (defn send-evidence-callback
   "Receive an Evidence record input as a JSON-serializable Clojure structure. Passed as a callback."
-  [input]
+  [agent-definition input]
     (try 
     ; TODO round-robin status servers. 
     (let [result @(client/post (str (:evidence-service-base env) "/evidence")
@@ -90,10 +89,15 @@
                               :body (json/write-str input)
                               :follow-redirects false})]
       (log/info "Posted evidence, got response" (:status result) (:headers result))
+      (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent") 1)
       ; Correct response is redirect to new resource.
       (if (= (:status result) 303)
-        true
-        (log/error "Can't send Evidence, status" (:status result))))
+        (do
+          (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent-ok") 1)
+          true)
+        (do
+          (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent-error") 1)
+          (log/error "Can't send Evidence, status" (:status result)))))
     (catch Exception e (log/error "Can't send Evidence, exception:" e))))
   
 
@@ -108,11 +112,11 @@
                  (fn []
                    (try
                     (log/info "Execute schedule" (:name schedule-item))
-                    (send-heartbeat (str (:agent-name agent-definition) "/input/" (:name schedule-item)))
+                    (send-heartbeat (str (:agent-name agent-definition) "/input/" (:name schedule-item)) 1)
                     (let [artifacts (fetch-artifacts agent-definition (:required-artifacts schedule-item))]
                       
                       ; Call the schedule function with the requested 
-                      ((:fun schedule-item) artifacts send-evidence-callback)
+                      ((:fun schedule-item) artifacts (partial agent-definition send-evidence-callback))
                       
                       (doseq [[_ [_ artifact-file]] artifacts]
                         (log/info "Deleting temporary artifact file" artifact-file)
