@@ -82,8 +82,8 @@
 (defn send-evidence-callback
   "Receive an Evidence record input as a JSON-serializable Clojure structure. Passed as a callback."
   [agent-definition input]
+    (log/info "Posting evidence")
     (try 
-    ; TODO round-robin status servers. 
     (let [result @(client/post (str (:evidence-service-base env) "/evidence")
                              {:headers {"Content-type" "application/json" "Authorization" (str "Token " (:evidence-service-auth-token env))}
                               :body (json/write-str input)
@@ -97,7 +97,8 @@
           true)
         (do
           (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent-error") 1)
-          (log/error "Can't send Evidence, status" (:status result)))))
+          (log/error "Can't send Evidence, status" (:status result))
+          false)))
     (catch Exception e (log/error "Can't send Evidence, exception:" e))))
   
 
@@ -122,7 +123,7 @@
                         (log/info "Deleting temporary artifact file" artifact-file)
                         (.delete artifact-file)))
                     (catch Exception e (log/error "Error in schedule" e))))
-                 schedule-pool)))
+                 schedule-pool :fixed-delay true)))
 
 (defn run-process
   [agent-definition]
@@ -131,6 +132,7 @@
 
 (defn run  
   [args agent-definition]
+  (log/info "Starting agent...")
   (let [cmd (first args)]
     (condp = cmd
       "ingest" (run-ingest agent-definition)
