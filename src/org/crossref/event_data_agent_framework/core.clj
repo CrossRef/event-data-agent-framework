@@ -1,6 +1,7 @@
 (ns org.crossref.event-data-agent-framework.core
   (:require [clojure.tools.logging :as log]
-            [clojure.data.json :as json])
+            [clojure.data.json :as json]
+            [clojure.core.async :refer [thread]])
   (:require [overtone.at-at :as at-at]
             [org.httpkit.client :as client]
             [config.core :refer [env]]
@@ -123,7 +124,16 @@
                         (log/info "Deleting temporary artifact file" artifact-file)
                         (.delete artifact-file)))
                     (catch Exception e (log/error "Error in schedule" e))))
-                 schedule-pool :fixed-delay true)))
+                 schedule-pool :fixed-delay true))
+  
+  ; NB doesn't yet fetch artifacts.
+  (doseq [runner (:runners agent-definition)]
+    (log/info "Starting Agent runner" (:name runner))
+    (let [num-threads (get runner :threads 1)]
+      (dotimes [t num-threads]
+        (log/info "Starting thread" t "for" (:name runner))
+        (thread
+          ((:fun runner) {} (partial send-evidence-callback agent-definition)))))))
 
 (defn run-process
   [agent-definition]

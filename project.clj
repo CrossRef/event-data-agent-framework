@@ -1,10 +1,11 @@
-(defproject org.crossref.event-data-agent-framework "0.1.4"
+(defproject org.crossref.event-data-agent-framework "0.1.5"
   :description "Framework for writing Crossref Event Data agents."
   :url "http://eventdata.crossref.org"
   :license {:name "The MIT License (MIT)"
             :url "https://opensource.org/licenses/MIT"}
   :plugins [[lein-localrepo "0.5.3"]]
   :dependencies [[org.clojure/clojure "1.8.0"]
+                 [org.clojure/core.async "0.2.391"]
                  [yogthos/config "0.8"]
                  [clj-time "0.12.0"]
                  [org.clojure/data.json "0.2.6"]
