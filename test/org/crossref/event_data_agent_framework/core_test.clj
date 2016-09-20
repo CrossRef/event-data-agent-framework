@@ -10,13 +10,11 @@
   (let [correct {:agent-name "Test Agent"
                  :version "12345"
                  :schedule [{:fun dummy-f :seconds 5 :name "Dummy Schedule Function"}]
-                 :runners [{:fun dummy-f :name "Dummy Runner Function"}]
-                 :build-evidence dummy-f
-                 :process-evidence dummy-f}]
+                 :runners [{:fun dummy-f :name "Dummy Runner Function"}]}]
     
     (testing "Correct object OK"
       (is (empty? (core/check-definition correct))))
     
-    (doseq [field-name [:agent-name :version :schedule :runners :build-evidence :process-evidence]]
+    (doseq [field-name [:agent-name :version :schedule :runners]]
       (testing (str "Missing field " field-name)
         (is (not-empty (core/check-definition (dissoc correct field-name)))))))) 

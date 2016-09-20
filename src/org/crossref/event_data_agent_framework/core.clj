@@ -19,9 +19,7 @@
       (when-not (:agent-name input) ["Missing agent-name"])
       (when-not (:version input) ["Missing version"])
       (when-not (:schedule input) ["Missing schedule"])
-      (when-not (:runners input) ["Missing runners"])
-      (when-not (:build-evidence input) ["Missing build-evidence"])
-      (when-not (:process-evidence input) ["Missing process-evidence"]))))
+      (when-not (:runners input) ["Missing runners"]))))
 
 (defn check-definition!
   "Check a definition, log and exit if there are errors."
@@ -124,7 +122,10 @@
                         (log/info "Deleting temporary artifact file" artifact-file)
                         (.delete artifact-file)))
                     (catch Exception e (log/error "Error in schedule" e))))
-                 schedule-pool :fixed-delay true))
+                 schedule-pool
+                 ; Default to fixed-delay true (i.e. wait n seconds after the task completes)
+                 ; but can be configured false (i.e. run schedule every n seconds)
+                 :fixed-delay (:fixed-delay schedule-item true)))
   
   ; NB doesn't yet fetch artifacts.
   (doseq [runner (:runners agent-definition)]

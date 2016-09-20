@@ -77,7 +77,7 @@
         version (get-in response [:headers :x-version])
         doi (when (= 200 (:status response))
               (:body response))]
-    {:doi doi :version version}))
+    {:doi doi :version version :query query}))
 
 (defn extract-dois-from-body-via-landing-page-urls
   "Fetch the set of DOIs that are mentioned in the body text by their landing page URLs.
