@@ -1,4 +1,4 @@
-(defproject org.crossref.event-data-agent-framework "0.1.7"
+(defproject org.crossref.event-data-agent-framework "0.1.8"
   :description "Framework for writing Crossref Event Data agents."
   :url "http://eventdata.crossref.org"
   :license {:name "The MIT License (MIT)"
@@ -17,7 +17,8 @@
                  [org.clojure/tools.logging "0.3.1"]
                  [org.apache.logging.log4j/log4j-core "2.6.2"]
                  [org.slf4j/slf4j-simple "1.7.21"]
-                 [org.clojure/tools.nrepl "0.2.11"]]
+                 [org.clojure/tools.nrepl "0.2.11"]
+                 [org.jsoup/jsoup "1.10.1"]]
   :main ^:skip-aot org.crossref.event-data-agent-framework.core
   :target-path "target/%s"
   :aot [org.crossref.event-data-agent-framework.core]
