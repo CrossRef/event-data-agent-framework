@@ -1,11 +1,15 @@
 (ns org.crossref.event-data-agent-framework.core
   (:require [clojure.tools.logging :as log]
             [clojure.data.json :as json]
-            [clojure.core.async :refer [thread]])
-  (:require [overtone.at-at :as at-at]
+            [clojure.core.async :refer [thread]]
+            [overtone.at-at :as at-at]
             [org.httpkit.client :as client]
             [config.core :refer [env]]
-            [robert.bruce :refer [try-try-again]])
+            [robert.bruce :refer [try-try-again]]
+            [event-data-common.artifact :as artifact]
+            [event-data-common.backoff :as backoff]
+            [event-data-common.status :as status]
+            [clojure.core.async :refer [go-loop thread buffer chan <!! >!! >! <!]])
   (:import [java.net URL]
            [java.io FileOutputStream File]
            [java.nio.channels ReadableByteChannel Channels])
@@ -17,7 +21,6 @@
   (not-empty
     (concat
       (when-not (:agent-name input) ["Missing agent-name"])
-      (when-not (:version input) ["Missing version"])
       (when-not (:schedule input) ["Missing schedule"])
       (when-not (:runners input) ["Missing runners"]))))
 
@@ -32,95 +35,67 @@
 
 (def schedule-pool (at-at/mk-pool))
 
-(defn send-heartbeat [heartbeat-name heartbeat-count]
-  (try 
-    (try-try-again {:sleep 10000 :tries 10}
-       #(let [result @(client/post (str (:status-service-base env) (str "/status/" heartbeat-name))
-                       {:headers {"Content-type" "text/plain" "Authorization" (str "Token " (:status-service-auth-token env))}
-                        :body (str heartbeat-count)})]
-         (when-not (= (:status result) 201)
-           (log/error "Can't send heartbeat, status" (:status result)))))
-   (catch Exception e (log/error "Can't send heartbeat, exception:" e))))
-
 (defn start-heartbeat
   "Schedule a named heartbeat with the Status server to trigger once a minute."
-  [heartbeat-name]
-  (at-at/every 60000 #(send-heartbeat heartbeat-name 1) schedule-pool))
-
-
-(defn fetch-artifact
-  "Download artifact to temp file. Return [version-url temp-file] or nil.
-  File must be deleted after use."
-  [agent-definition artifact-name]
-  (send-heartbeat (str (:agent-name agent-definition) "/artifact/fetch") 1)
-  (let [; Resolve the current artifact
-        latest-artifact-url (new URL (str (:evidence-service-base env) "/artifacts/" artifact-name "/current"))
-        
-        ; This is the persistent URL for the Artifact. We need this so we know what version we got.
-        current-artifact-url (-> (client/get (str (:evidence-service-base env) "/artifacts/" artifact-name "/current") {:follow-redirects false})
-                                 deref
-                                 :headers
-                                 :location)
-        
-        ^File temp-file (File/createTempFile "artifact" ".tmp")]
-    (with-open [current-artifact-data (-> (client/get current-artifact-url {:as :stream}) deref :body)
-                ^ReadableByteChannel channel (Channels/newChannel current-artifact-data)
-                ^FileOutputStream output-stream (new FileOutputStream temp-file)]
-      (log/info "Fetch artifact" artifact-name "from" latest-artifact-url "into" (str temp-file))
-      (.transferFrom (.getChannel output-stream) channel 0 Long/MAX_VALUE))
-
-    [current-artifact-url temp-file]))
+  [service component fragment]
+  (at-at/every 60000 #(status/send! service component fragment 1) schedule-pool))
 
 (defn fetch-artifacts
-  "Download seq of artifact names into a map of {artifact-name [version-url temp-file]}.
-  Files must be deleted after use."
+  "Download seq of artifact names into a map of {artifact-name [version-url text-content]}."
   [agent-definition artifact-names]
   (into {} (map (fn [artifact-name]
-                  [artifact-name (fetch-artifact agent-definition artifact-name)]) artifact-names)))
+                  [artifact-name (artifact/fetch-latest-artifact-string agent-definition artifact-name)])
+                artifact-names)))
 
-(defn send-evidence-callback
-  "Receive an Evidence record input as a JSON-serializable Clojure structure. Passed as a callback."
-  [agent-definition input]
-    (log/info "Posting evidence")
-    (try 
-    (let [result @(client/post (str (:evidence-service-base env) "/evidence")
-                             {:headers {"Content-type" "application/json" "Authorization" (str "Token " (:evidence-service-auth-token env))}
-                              :body (json/write-str input)
-                              :follow-redirects false})]
-      (log/info "Posted evidence, got response" (:status result) (:headers result))
-      (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent") 1)
-      ; Correct response is redirect to new resource.
-      (if (= (:status result) 303)
-        (do
-          (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent-ok") 1)
-          true)
-        (do
-          (send-heartbeat (str (:agent-name agent-definition) "/evidence/sent-error") 1)
-          (log/error "Can't send Evidence, status" (:status result))
-          false)))
-    (catch Exception e (log/error "Can't send Evidence, exception:" e))))
-  
+(def input-bundle-chan (chan))
 
-(defn run-ingest
+(def retry-delay (atom 1000))
+(def retries 10)
+
+(defn start-input-bundle-processing
   [agent-definition]
+  (let [url (str (:percolator-url-base env) "/input")
+        headers  {"Content-Type" "application/json"
+                  "Authorization" (str "Bearer " (:jwt-token env))}]
+  (log/info "Starting input bundle sending loop. URL:" url)
+  (go-loop [input-bundle (<! input-bundle-chan)]
+    (status/send! (:agent-name agent-definition) "input-bundle" "occurred" 1)
+    (backoff/try-backoff
+      ; Exception thrown if not 200 or 201, also if some other exception is thrown during the client posting.
+      #(let [response @(client/post url {:headers headers :body (json/write-str input-bundle)})]
+          (if (#{201 200} (:status response))
+            (status/send! (:agent-name agent-definition) "input-bundle" "sent" 1)
+            (do
+              (status/send! (:agent-name agent-definition) "input-bundle" "error" 1)
+              (throw (new Exception (str "Failed to send to Percolator with status code: " (:status response) (:body response)))))))
+      @retry-delay
+      retries
+      ; Only log info on retry because it'll be tried again.
+      #(log/info "Error sending Input Bundle" (:id input-bundle) "with exception" (.getMessage %))
+      ; But if terminate is called, that's a serious problem.
+      #(do
+        (status/send! (:agent-name agent-definition) "input-bundle" "abandoned" 1)
+        (log/error "Failed to send Input Bundle" (:id input-bundle) "to Percolator"))
+      #(log/info "Finished sending to Percolator"))
+  (recur (<! input-bundle-chan)))))
+
+(defn run
+  [agent-definition]
+
   (check-definition! agent-definition)
-  (start-heartbeat (str (:agent-name agent-definition) "/ingest/heartbeat"))
-  
+  (start-heartbeat (:agent-name agent-definition) "heartbeat" "tick")
+  (start-input-bundle-processing agent-definition)
+
+  (log/info "Starting agent...")
   (doseq [schedule-item (:schedule agent-definition)]
     (log/info "Scheduling " (:name schedule-item) "every" (:seconds schedule-item) "seconds")
     (at-at/every (* 1000 (:seconds schedule-item))
                  (fn []
                    (try
                     (log/info "Execute schedule" (:name schedule-item))
-                    (send-heartbeat (str (:agent-name agent-definition) "/input/" (:name schedule-item)) 1)
+                    (status/send! (:agent-name agent-definition) "schedule" (:name schedule-item) 1)
                     (let [artifacts (fetch-artifacts agent-definition (:required-artifacts schedule-item))]
-                      
-                      ; Call the schedule function with the requested 
-                      ((:fun schedule-item) artifacts (partial send-evidence-callback agent-definition))
-                      
-                      (doseq [[_ [_ artifact-file]] artifacts]
-                        (log/info "Deleting temporary artifact file" artifact-file)
-                        (.delete artifact-file)))
+                      ((:fun schedule-item) artifacts input-bundle-chan))
                     (catch Exception e (log/error "Error in schedule" e))))
                  schedule-pool
                  ; Default to fixed-delay true (i.e. wait n seconds after the task completes)
@@ -134,17 +109,4 @@
       (dotimes [t num-threads]
         (log/info "Starting thread" t "for" (:name runner))
         (thread
-          ((:fun runner) {} (partial send-evidence-callback agent-definition)))))))
-
-(defn run-process
-  [agent-definition]
-  (check-definition! agent-definition)
-  (start-heartbeat (str (:agent-name agent-definition) "/process/heartbeat")))
-
-(defn run  
-  [args agent-definition]
-  (log/info "Starting agent...")
-  (let [cmd (first args)]
-    (condp = cmd
-      "ingest" (run-ingest agent-definition)
-      "process" (run-process agent-definition))))
+          ((:fun runner) {} input-bundle-chan))))))
