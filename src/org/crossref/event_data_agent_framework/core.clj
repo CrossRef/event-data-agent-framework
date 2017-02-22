@@ -44,7 +44,8 @@
   "Download seq of artifact names into a map of {artifact-name [version-url text-content]}."
   [agent-definition artifact-names]
   (into {} (map (fn [artifact-name]
-                  [artifact-name (artifact/fetch-latest-artifact-string artifact-name)])
+                  [artifact-name [(artifact/fetch-latest-version-link artifact-name)
+                                  (artifact/fetch-latest-artifact-string artifact-name)]])
                 artifact-names)))
 
 (def input-bundle-chan (chan))
