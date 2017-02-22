@@ -46,7 +46,7 @@ The Agent automatically reports to the Health Service. Given the configuraion of
 
 The following environment variables should be set:
 
-  - `PERCOLATOR_URL_BASE` - URL of Percolator service base, e.g. `http://localhost:8006` or `https://percolator.eventdata.crossref.org`
+  - `PERCOLATOR_URL_BASE` - URL of Percolator service base with no trailing slash, e.g. `http://localhost:8006` or `https://percolator.eventdata.crossref.org`
   - `STATUS_SERVICE_BASE` - URL of Status service, e.g. `http://localhost:8003` or `https://status.eventdata.crossref.org`
   - `JWT_TOKEN` - JWT authorized to deposit events with the source name that this agent produces.
   
