@@ -3,7 +3,7 @@
             [clojure.data.json :as json]
             [clojure.core.async :refer [thread]]
             [overtone.at-at :as at-at]
-            [org.httpkit.client :as client]
+            [clj-http.client :as client]
             [config.core :refer [env]]
             [robert.bruce :refer [try-try-again]]
             [event-data-common.artifact :as artifact]
@@ -63,7 +63,7 @@
     (status/send! (:agent-name agent-definition) "input-bundle" "occurred" 1)
     (backoff/try-backoff
       ; Exception thrown if not 200 or 201, also if some other exception is thrown during the client posting.
-      #(let [response @(client/post url {:headers headers :body (json/write-str input-bundle)})]
+      #(let [response (client/post url {:headers headers :body (json/write-str input-bundle)})]
           (if (#{201 200} (:status response))
             (status/send! (:agent-name agent-definition) "input-bundle" "sent" 1)
             (do
