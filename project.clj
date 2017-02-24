@@ -1,4 +1,4 @@
-(defproject org.crossref.event-data-agent-framework "0.1.12"
+(defproject org.crossref.event-data-agent-framework "0.1.13"
   :description "Framework for writing Crossref Event Data agents."
   :url "http://eventdata.crossref.org"
   :license {:name "The MIT License (MIT)"
@@ -19,7 +19,7 @@
                  [org.slf4j/slf4j-simple "1.7.21"]
                  [org.clojure/tools.nrepl "0.2.11"]
                  [org.jsoup/jsoup "1.10.1"]
-                 [event-data-common "0.1.14"]]
+                 [event-data-common "0.1.16"]]
   :main ^:skip-aot org.crossref.event-data-agent-framework.core
   :jvm-opts ["-Duser.timezone=UTC"]
   :target-path "target/%s"
