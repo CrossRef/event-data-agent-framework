@@ -5,6 +5,8 @@
             [overtone.at-at :as at-at]
             [clj-http.client :as client]
             [config.core :refer [env]]
+            [clj-time.core :as clj-time]
+            [clj-time.format :as clj-time-format]
             [robert.bruce :refer [try-try-again]]
             [event-data-common.artifact :as artifact]
             [event-data-common.backoff :as backoff]
@@ -12,8 +14,21 @@
             [clojure.core.async :refer [go-loop thread buffer chan <!! >!! >! <!]])
   (:import [java.net URL]
            [java.io FileOutputStream File]
-           [java.nio.channels ReadableByteChannel Channels])
+           [java.nio.channels ReadableByteChannel Channels]
+           [org.apache.kafka.clients.producer KafkaProducer Producer ProducerRecord]
+           [org.apache.kafka.clients.consumer KafkaConsumer Consumer ConsumerRecords]
+           [java.util UUID])
   (:gen-class))
+
+(def kafka-producer
+  (delay
+    (let [properties (java.util.Properties.)]
+      (.put properties "bootstrap.servers" (:global-kafka-bootstrap-servers env))
+      (.put properties "acks", "all")
+      (.put properties "retries", (int 5))
+      (.put properties "key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
+      (.put properties "value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
+      (KafkaProducer. properties))))
 
 (defn check-definition
   "Checks an Agent definition, returns a list of errors or nil for OK."
@@ -22,6 +37,7 @@
     (concat
       (when-not (:agent-name input) ["Missing agent-name"])
       (when-not (:schedule input) ["Missing schedule"])
+      (when-not (:jwt input) ["Missing JWT"])
       (when-not (:runners input) ["Missing runners"]))))
 
 (defn check-definition!
@@ -38,7 +54,7 @@
 (defn start-heartbeat
   "Schedule a named heartbeat with the Status server to trigger once a minute."
   [service component fragment]
-  (at-at/every 60000 #(status/send! service component fragment 1) schedule-pool))
+  (at-at/every 60000 #(status/send! service component fragment) schedule-pool))
 
 (defn fetch-artifacts
   "Download seq of artifact names into a map of {artifact-name [version-url text-content]}."
@@ -48,44 +64,43 @@
                                   (artifact/fetch-latest-artifact-string artifact-name)]])
                 artifact-names)))
 
-(def input-bundle-chan (chan))
-
 (def retry-delay (atom 1000))
 (def retries 10)
 
-(defn start-input-bundle-processing
-  [agent-definition]
-  (let [url (str (:percolator-url-base env) "/input")
-        headers  {"Content-Type" "application/json"
-                  "Authorization" (str "Bearer " (:jwt-token env))}]
-  (log/info "Starting input bundle sending loop. URL:" url)
-  (go-loop [input-bundle (<! input-bundle-chan)]
-    (status/send! (:agent-name agent-definition) "input-bundle" "occurred" 1)
-    (backoff/try-backoff
-      ; Exception thrown if not 200 or 201, also if some other exception is thrown during the client posting.
-      #(let [response (client/post url {:headers headers :body (json/write-str input-bundle)})]
-          (if (#{201 200} (:status response))
-            (status/send! (:agent-name agent-definition) "input-bundle" "sent" 1)
-            (do
-              (status/send! (:agent-name agent-definition) "input-bundle" "error" 1)
-              (throw (new Exception (str "Failed to send to Percolator with status code: " (:status response) (:body response)))))))
-      @retry-delay
-      retries
-      ; Only log info on retry because it'll be tried again.
-      #(log/info "Error sending Input Bundle" (:id input-bundle) "with exception" (.getMessage %))
-      ; But if terminate is called, that's a serious problem.
-      #(do
-        (status/send! (:agent-name agent-definition) "input-bundle" "abandoned" 1)
-        (log/error "Failed to send Input Bundle" (:id input-bundle) "to Percolator"))
-      #(log/info "Finished sending to Percolator"))
-  (recur (<! input-bundle-chan)))))
+(def date-format
+  (clj-time-format/formatters :basic-date))
+
+(defn decorate-evidence-record
+  "Associate an evidence and date stamp at the same time.
+   ID has YYYYMMDD prefix to make downstream analysis workflows a bit easier."
+  [evidence-record agent-definition]
+  (let [now (clj-time/now)
+        id (str
+             (clj-time-format/unparse date-format now)
+             "-" (:source-id evidence-record) "-"
+             (UUID/randomUUID))
+        now-str (str now)]
+    (assoc evidence-record
+      :jwt (:jwt agent-definition)
+      :id id
+      :timestamp now-str)))
+
+(defn callback
+  [agent-definition evidence-record]
+  (let [topic (:percolator-input-evidence-record-topic env)
+        decorated (decorate-evidence-record evidence-record agent-definition)
+        id (:id decorated)]
+    (status/send! (:agent-name agent-definition) "input-bundle" "occurred")
+    (log/info "Send" id "to" topic)
+    (.send @kafka-producer (ProducerRecord. topic
+                                            id
+                                            (json/write-str decorated)))))
 
 (defn run
   [agent-definition]
 
   (check-definition! agent-definition)
   (start-heartbeat (:agent-name agent-definition) "heartbeat" "tick")
-  (start-input-bundle-processing agent-definition)
 
   (log/info "Starting agent...")
   (doseq [schedule-item (:schedule agent-definition)]
@@ -94,9 +109,9 @@
                  (fn []
                    (try
                     (log/info "Execute schedule" (:name schedule-item))
-                    (status/send! (:agent-name agent-definition) "schedule" (:name schedule-item) 1)
+                    (status/send! (:agent-name agent-definition) "schedule" (:name schedule-item))
                     (let [artifacts (fetch-artifacts agent-definition (:required-artifacts schedule-item))]
-                      ((:fun schedule-item) artifacts input-bundle-chan))
+                      ((:fun schedule-item) artifacts (partial callback agent-definition)))
                     (catch Exception e (log/error "Error in schedule" e))))
                  schedule-pool
                  ; Default to fixed-delay true (i.e. wait n seconds after the task completes)
@@ -110,4 +125,4 @@
       (dotimes [t num-threads]
         (log/info "Starting thread" t "for" (:name runner))
         (thread
-          ((:fun runner) {} input-bundle-chan))))))
+          ((:fun runner) {} (partial callback agent-definition)))))))

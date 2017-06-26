@@ -1,4 +1,4 @@
-(defproject org.crossref.event-data-agent-framework "0.1.17"
+(defproject org.crossref.event-data-agent-framework "0.2.0"
   :description "Framework for writing Crossref Event Data agents."
   :url "http://eventdata.crossref.org"
   :license {:name "The MIT License (MIT)"
@@ -18,9 +18,12 @@
                  [org.slf4j/slf4j-simple "1.7.21"]
                  [org.clojure/tools.nrepl "0.2.11"]
                  [org.jsoup/jsoup "1.10.1"]
-                 [event-data-common "0.1.17"]
+                 [event-data-common "0.1.29"]
                  ; Reqired for TLS SNI.
-                 [org.apache.httpcomponents/httpclient "4.5.3"]]
+                 [org.apache.httpcomponents/httpclient "4.5.3"]
+
+                 [org.apache.kafka/kafka-clients "0.10.2.0"]
+                 [org.apache.kafka/kafka-streams "0.10.2.0"]]
   :main ^:skip-aot org.crossref.event-data-agent-framework.core
   :jvm-opts ["-Duser.timezone=UTC"]
   :target-path "target/%s"
